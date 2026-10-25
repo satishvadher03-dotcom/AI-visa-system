@@ -1,0 +1,334 @@
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  CUSTOMER
+  CONSULTANT
+  ADMIN
+}
+
+enum ApplicationStatus {
+  DRAFT
+  SUBMITTED
+  UNDER_REVIEW
+  DOCUMENTS_PENDING
+  RESUBMITTED
+  PROCESSING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum AppointmentStatus {
+  SCHEDULED
+  COMPLETED
+  CANCELLED
+  RESCHEDULED
+}
+
+enum DocumentStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum EnquiryStatus {
+  NEW
+  CONTACTED
+  RESOLVED
+  CLOSED
+}
+
+model User {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  passwordHash  String
+  role          Role      @default(CUSTOMER)
+  firstName     String
+  lastName      String
+  phone         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  profile               UserProfile?
+  applications          VisaApplication[]         @relation("CustomerApplications")
+  assignedApplications  VisaApplication[]         @relation("ConsultantApplications")
+  appointmentsAsCustomer Appointment[]           @relation("CustomerAppointments")
+  appointmentsAsConsultant Appointment[]         @relation("ConsultantAppointments")
+  enquiries             Enquiry[]
+  documents             PrivateDocument[]
+  statusChanges         ApplicationStatusHistory[] @relation("UserStatusChanges")
+  internalNotes         InternalCaseNote[]         @relation("AuthorNotes")
+  chatSessions          ChatSession[]
+  notifications         Notification[]
+  auditLogs             AuditLog[]
+
+  @@index([email])
+  @@index([role])
+}
+
+model UserProfile {
+  id                String   @id @default(uuid())
+  userId            String   @unique
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  nationality       String?
+  passportNumber    String?
+  address           String?
+  preferredLanguage String   @default("en")
+  updatedAt         DateTime @updatedAt
+}
+
+model VisaProgram {
+  id                    String                @id @default(uuid())
+  countryCode           String                // e.g. "AE", "US", "IN", "GB", "SG"
+  countryName           String                // e.g. "United Arab Emirates", "India"
+  flowType              String                // "WORLD_TO_INDIA" or "INDIA_TO_WORLD"
+  visaType              String                // e.g. "Tourist eVisa", "Business eVisa", "Medical eVisa"
+  category              String                // e.g. "Tourism", "Business", "Conference", "Medical"
+  entryType             String                // e.g. "Single Entry", "Multiple Entry"
+  validity              String                // e.g. "30 Days", "60 Days", "1 Year"
+  processingTimeDays    Int                   @default(3)
+  officialFeeUSD        Float                 @default(0.0)
+  serviceFeeUSD         Float                 @default(49.0)
+  description           String
+  eligibleNationalities String                // Comma-separated or "ALL_ELIGIBLE"
+  officialSourceUrl     String
+  officialSourceName    String
+  lastVerifiedAt        DateTime              @default(now())
+  isActive              Boolean               @default(true)
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+
+  officialSources       OfficialVisaSource[]
+  documentRequirements  DocumentRequirement[]
+  applications          VisaApplication[]
+
+  @@index([countryCode])
+  @@index([flowType])
+  @@index([category])
+  @@index([isActive])
+}
+
+model OfficialVisaSource {
+  id            String      @id @default(uuid())
+  visaProgramId String
+  visaProgram   VisaProgram @relation(fields: [visaProgramId], references: [id], onDelete: Cascade)
+  name          String
+  officialUrl   String
+  portalName    String
+  verifiedDate  DateTime    @default(now())
+  notes         String?
+
+  @@index([visaProgramId])
+}
+
+model Enquiry {
+  id                 String        @id @default(uuid())
+  userId             String?
+  user               User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  fullName           String
+  email              String
+  phone              String?
+  nationality        String
+  destinationCountry String
+  visaType           String
+  message            String
+  status             EnquiryStatus @default(NEW)
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+
+  @@index([email])
+  @@index([status])
+}
+
+model VisaApplication {
+  id                   String                   @id @default(uuid())
+  applicationNumber    String                   @unique
+  userId               String
+  user                 User                     @relation("CustomerApplications", fields: [userId], references: [id], onDelete: Cascade)
+  visaProgramId        String
+  visaProgram          VisaProgram              @relation(fields: [visaProgramId], references: [id])
+  status               ApplicationStatus        @default(SUBMITTED)
+  travelDate           DateTime?
+  passportExpiryDate   DateTime?
+  applicantName        String?
+  applicantPassport    String?
+  notes                String?
+  assignedConsultantId String?
+  assignedConsultant   User?                    @relation("ConsultantApplications", fields: [assignedConsultantId], references: [id], onDelete: SetNull)
+  submittedAt          DateTime                 @default(now())
+  updatedAt            DateTime                 @updatedAt
+
+  assignments          ConsultantAssignment[]
+  documents            PrivateDocument[]
+  statusHistory        ApplicationStatusHistory[]
+  internalNotes        InternalCaseNote[]
+  appointments         Appointment[]
+
+  @@index([userId])
+  @@index([assignedConsultantId])
+  @@index([status])
+  @@index([applicationNumber])
+}
+
+model ConsultantAssignment {
+  id            String          @id @default(uuid())
+  applicationId String
+  application   VisaApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  consultantId  String
+  assignedAt    DateTime        @default(now())
+  notes         String?
+
+  @@index([applicationId])
+  @@index([consultantId])
+}
+
+model Appointment {
+  id              String            @id @default(uuid())
+  userId          String
+  user            User              @relation("CustomerAppointments", fields: [userId], references: [id], onDelete: Cascade)
+  consultantId    String?
+  consultant      User?             @relation("ConsultantAppointments", fields: [consultantId], references: [id], onDelete: SetNull)
+  applicationId   String?
+  application     VisaApplication?  @relation(fields: [applicationId], references: [id], onDelete: SetNull)
+  appointmentDate DateTime
+  timeSlot        String            // e.g. "10:00 - 10:30 AM"
+  status          AppointmentStatus @default(SCHEDULED)
+  purpose         String
+  meetingLink     String?
+  notes           String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@index([userId])
+  @@index([consultantId])
+  @@index([appointmentDate, timeSlot])
+}
+
+model DocumentRequirement {
+  id               String            @id @default(uuid())
+  visaProgramId    String
+  visaProgram      VisaProgram       @relation(fields: [visaProgramId], references: [id], onDelete: Cascade)
+  name             String            // e.g. "Passport Bio Page Scan"
+  description      String            // e.g. "Clear color scan of valid passport with at least 6 months validity"
+  isMandatory      Boolean           @default(true)
+  allowedMimeTypes String            @default("application/pdf,image/jpeg,image/png")
+  maxSizeBytes     Int               @default(5242880) // 5MB
+
+  documents        PrivateDocument[]
+
+  @@index([visaProgramId])
+}
+
+model PrivateDocument {
+  id                 String               @id @default(uuid())
+  applicationId      String
+  application        VisaApplication      @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  userId             String
+  user               User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  requirementId      String?
+  requirement        DocumentRequirement? @relation(fields: [requirementId], references: [id], onDelete: SetNull)
+  originalFilename   String
+  storageFilename    String               @unique
+  mimeType           String
+  fileSizeBytes      Int
+  verificationStatus DocumentStatus       @default(PENDING)
+  rejectionReason    String?
+  uploadedAt         DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+
+  @@index([applicationId])
+  @@index([userId])
+  @@index([verificationStatus])
+}
+
+model ApplicationStatusHistory {
+  id            String            @id @default(uuid())
+  applicationId String
+  application   VisaApplication   @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  fromStatus    ApplicationStatus
+  toStatus      ApplicationStatus
+  changedById   String
+  changedBy     User              @relation("UserStatusChanges", fields: [changedById], references: [id])
+  comment       String?
+  createdAt     DateTime          @default(now())
+
+  @@index([applicationId])
+  @@index([changedById])
+}
+
+model InternalCaseNote {
+  id            String          @id @default(uuid())
+  applicationId String
+  application   VisaApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  authorId      String
+  author        User            @relation("AuthorNotes", fields: [authorId], references: [id])
+  note          String
+  createdAt     DateTime        @default(now())
+
+  @@index([applicationId])
+  @@index([authorId])
+}
+
+model ChatSession {
+  id           String        @id @default(uuid())
+  userId       String?
+  user         User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  sessionToken String        @unique
+  language     String        @default("en") // "en", "gu", "hi"
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  messages     ChatMessage[]
+
+  @@index([sessionToken])
+}
+
+model ChatMessage {
+  id            String      @id @default(uuid())
+  chatSessionId String
+  chatSession   ChatSession @relation(fields: [chatSessionId], references: [id], onDelete: Cascade)
+  role          String      // "user" or "model"
+  content       String
+  sourcesJson   String?     // Stored JSON array of verified sources
+  createdAt     DateTime    @default(now())
+
+  @@index([chatSessionId])
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  message   String
+  isRead    Boolean  @default(false)
+  link      String?
+  createdAt DateTime @default(now())
+
+  @@index([userId, isRead])
+}
+
+model AuditLog {
+  id           String   @id @default(uuid())
+  userId       String?
+  user         User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action       String   // e.g. "USER_LOGIN", "APPLICATION_SUBMITTED", "DOCUMENT_UPLOADED", "DOCUMENT_DOWNLOADED", "STATUS_CHANGED", "ROLE_UPDATED"
+  resourceType String   // e.g. "User", "VisaApplication", "PrivateDocument", "Appointment"
+  resourceId   String?
+  detailsJson  String?
+  ipAddress    String?
+  userAgent    String?
+  createdAt    DateTime @default(now())
+
+  @@index([userId])
+  @@index([action])
+  @@index([resourceType])
+  @@index([createdAt])
+}
